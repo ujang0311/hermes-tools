@@ -18,7 +18,7 @@
 # ============================================================================
 set -u -o pipefail
 
-VERSION_SCRIPT="1.2.0"
+VERSION_SCRIPT="1.3.0"
 SELF_URL="${HERMES_MIGRATE_URL:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main/hermes-migrate.sh}"
 REPO_RAW="${HERMES_TOOLS_RAW:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main}"
 SERVICES_CANDIDATES=("${HERMES_SERVICE:-hermes-agent}" hermes-gateway hermes-dashboard)
@@ -237,11 +237,16 @@ else INSTALL_DIR=$(dirname "$HERMES_BIN"); VPY=$(command -v python3); VPIP=$(com
 
   RUNMODE=$( [ -n "$SERVICE" ] && echo "$SCOPE" || echo "manual" )
 }
-as_hermes(){ # jalankan CLI dengan env yang benar
+run_hermes(){ # jalankan CLI dengan HOME/HERMES_HOME & cwd yang benar (NON-login shell:
+  # login shell bisa mereset HERMES_HOME dari profil, sehingga CLI jatuh ke install dir)
   local cmd="$1"
-  if [ "$OC_USER" = root ]; then env HOME="$STATE_DIR" HERMES_HOME="$STATE_DIR" bash -lc "$cmd"
-  else sudo -u "$OC_USER" -H env HOME="$OC_HOME" HERMES_HOME="$STATE_DIR" bash -lc "cd $STATE_DIR 2>/dev/null; $cmd"; fi
+  if [ "$OC_USER" = root ]; then
+    bash -c "export HOME='$STATE_DIR' HERMES_HOME='$STATE_DIR'; cd '$STATE_DIR' 2>/dev/null || true; $cmd"
+  else
+    sudo -u "$OC_USER" -H bash -c "export HOME='$OC_HOME' HERMES_HOME='$STATE_DIR'; cd '$STATE_DIR' 2>/dev/null || true; $cmd"
+  fi
 }
+as_hermes(){ run_hermes "$1"; }
 show_detect(){
   sec "Deteksi otomatis" "$(elapsed)"
   tree "├" "hermes home  ${B}$STATE_DIR${R}$( [ -d "$STATE_DIR" ] && echo "  ${GRY}($(hsize "$STATE_DIR"))${R}" || echo "  ${YLW}(belum ada)${R}" )"
@@ -271,7 +276,7 @@ if [ "$ACTION" = backup ]; then
   CMD="'$HERMES_BIN' backup -o '$ZIP'"
   if [ "$DRY_RUN" -eq 1 ]; then info "dry-run: $CMD"
   else
-    if hb "membuat arsip zip" bash -c "$( [ "$OC_USER" = root ] && echo "env HOME='$STATE_DIR' HERMES_HOME='$STATE_DIR' bash -lc \"$CMD\"" || echo "sudo -u $OC_USER -H env HOME='$OC_HOME' HERMES_HOME='$STATE_DIR' bash -lc \"$CMD\"" )"; then
+    if hb "membuat arsip zip" run_hermes "$CMD"; then
       ok "arsip jadi ${GRN}${B}$(basename "$ZIP")${R}  ${GRY}($(hsize "$ZIP") · ${HB_ELAPSED}s)${R}"
       if hb "verifikasi isi zip" zip_check "$ZIP"; then ok "verifikasi zip OK"; else warn "verifikasi zip menemukan masalah"; fi
       grep -iE "restore with|excluded" /tmp/hermes-migrate-cmd.log 2>/dev/null | head -2 | sed 's/^/      /'
@@ -357,7 +362,7 @@ if [ "$OC_USER" != root ]; then
   fi
 fi
 CMD="'$HERMES_BIN' import '$IMP_ARCHIVE' --force"
-if hb "hermes import (config, skill, sesi, memori)" bash -c "$( [ "$OC_USER" = root ] && echo "env HOME='$STATE_DIR' HERMES_HOME='$STATE_DIR' bash -lc \"$CMD\"" || echo "sudo -u $OC_USER -H env HOME='$OC_HOME' HERMES_HOME='$STATE_DIR' bash -lc \"$CMD\"" )"; then
+if hb "hermes import (config, skill, sesi, memori)" run_hermes "$CMD"; then
   ok "import selesai ${GRY}(${HB_ELAPSED}s)${R}"
   grep -iE "restored|preserved|warning|skipped" /tmp/hermes-migrate-cmd.log | head -6 | sed 's/^/      /'
 else
@@ -365,6 +370,26 @@ else
 fi
 chown -R "$OC_USER:$OC_GROUP" "$STATE_DIR" 2>/dev/null || true
 [ "$COPIED_ARCHIVE" = 1 ] && rm -f "$IMP_ARCHIVE"
+# pastikan data benar-benar mendarat di HERMES_HOME (bukan install dir)
+DB_SIZE=$(stat -c %s "$STATE_DIR/state.db" 2>/dev/null || echo 0)
+DB_SRC=$(python3 -c "
+import zipfile,sys
+try:
+    z=zipfile.ZipFile('$ARCHIVE'); print(max((i.file_size for i in z.infolist() if i.filename.endswith('state.db')), default=0))
+except Exception: print(0)" 2>/dev/null || echo 0)
+if [ "$DB_SRC" -gt 5000000 ] && [ "$DB_SIZE" -lt $((DB_SRC / 4)) ]; then
+  warn "state.db di HERMES_HOME (${DB_SIZE}B) jauh lebih kecil dari isi arsip (${DB_SRC}B)"
+  hint "kemungkinan import mendarat di install dir — script mencoba memindahkan otomatis"
+  for f in state.db shared-state.db kanban.db config.yaml SOUL.md; do
+    [ -f "$INSTALL_DIR/$f" ] && [ ! -f "$STATE_DIR/$f" ] && cp -f "$INSTALL_DIR/$f" "$STATE_DIR/" 2>/dev/null
+  done
+  for d in skills sessions cron plugin-data state platforms memories hooks kanban; do
+    [ -d "$INSTALL_DIR/$d" ] && { mkdir -p "$STATE_DIR/$d"; cp -a "$INSTALL_DIR/$d/." "$STATE_DIR/$d/" 2>/dev/null; }
+  done
+  chown -R "$OC_USER:$OC_GROUP" "$STATE_DIR" 2>/dev/null || true
+  NEW_DB=$(stat -c %s "$STATE_DIR/state.db" 2>/dev/null || echo 0)
+  [ "$NEW_DB" -gt "$DB_SIZE" ] && ok "data dipindahkan ke HERMES_HOME (state.db ${NEW_DB}B)" || warn "pemindahan otomatis tidak lengkap — cek manual"
+fi
 
 # path lokal server lama di dalam DB/transcript → petakan ke lokasi baru (otomatis)
 OLDP=$(python3 - "$STATE_DIR" <<'PY' 2>/dev/null || true

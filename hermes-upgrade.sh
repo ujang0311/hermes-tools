@@ -18,7 +18,7 @@
 # ============================================================================
 set -u -o pipefail
 
-VERSION_SCRIPT="1.2.0"
+VERSION_SCRIPT="1.3.0"
 SELF_URL="${HERMES_UPGRADE_URL:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main/hermes-upgrade.sh}"
 REPO_GIT="${HERMES_REPO_URL:-https://github.com/NousResearch/hermes-agent}"
 SERVICES_CANDIDATES=("${HERMES_SERVICE:-hermes-agent}" hermes-gateway hermes-dashboard)
@@ -176,9 +176,15 @@ fix_ownership(){ # pastikan source repo dimiliki user service & git aman dipakai
   else sudo -u "$OC_USER" -H git config --global --add safe.directory "$dir" 2>/dev/null || true; fi
   ok "ownership & safe.directory siap: $dir"
 }
-as_hermes(){ local cmd="$1"
-  if [ "$OC_USER" = root ]; then env HOME="$STATE_DIR" HERMES_HOME="$STATE_DIR" bash -lc "$cmd"
-  else sudo -u "$OC_USER" -H env HOME="$OC_HOME" HERMES_HOME="$STATE_DIR" bash -lc "cd $STATE_DIR 2>/dev/null; $cmd"; fi; }
+run_hermes(){ # NON-login shell: login shell bisa mereset HERMES_HOME → CLI jatuh ke install dir
+  local cmd="$1"
+  if [ "$OC_USER" = root ]; then
+    bash -c "export HOME='$STATE_DIR' HERMES_HOME='$STATE_DIR'; cd '$STATE_DIR' 2>/dev/null || true; $cmd"
+  else
+    sudo -u "$OC_USER" -H bash -c "export HOME='$OC_HOME' HERMES_HOME='$STATE_DIR'; cd '$STATE_DIR' 2>/dev/null || true; $cmd"
+  fi
+}
+as_hermes(){ run_hermes "$1"; }
 
 sec "[1/7] Deteksi otomatis" "$(elapsed)"
 tree "├" "hermes home  ${B}$STATE_DIR${R}$( [ -d "$STATE_DIR" ] && echo "  ${GRY}($(hsize "$STATE_DIR"))${R}" || echo "  ${YLW}(belum ada)${R}" )"
@@ -287,7 +293,7 @@ printf "\n"; sec "[4/7] Backup sebelum update" "$(elapsed)"
 if [ "$DO_BACKUP" -eq 1 ] && [ "$CHECK" -eq 0 ]; then
   mkdir -p "$BACKUP_DIR"; chmod 750 "$BACKUP_DIR" 2>/dev/null || true; chown "$OC_USER:$OC_GROUP" "$BACKUP_DIR" 2>/dev/null || true
   TS=$(date +%Y%m%d-%H%M%S); ZIP="$BACKUP_DIR/hermes-pre-upgrade-$TS.zip"
-  if hb "hermes backup" bash -c "$( [ "$OC_USER" = root ] && echo "env HOME='$STATE_DIR' HERMES_HOME='$STATE_DIR' bash -lc \"'$HERMES_BIN' backup -o '$ZIP'\"" || echo "sudo -u $OC_USER -H env HOME='$OC_HOME' HERMES_HOME='$STATE_DIR' bash -lc \"'$HERMES_BIN' backup -o '$ZIP'\"" )"; then
+  if hb "hermes backup" run_hermes "'$HERMES_BIN' backup -o '$ZIP'"; then
     ok "arsip: $(basename "$ZIP") ${GRY}($(hsize "$ZIP") · ${HB_ELAPSED}s)${R}"
   else warn "backup gagal/terlewat — lanjut (lihat /tmp/hermes-upgrade-cmd.log)"; fi
 elif [ "$DO_BACKUP" -eq 0 ]; then info "--no-backup: dilewati"
@@ -308,7 +314,7 @@ if [ "$CHECK" -eq 1 ]; then
 fi
 if [ "$REPAIR_ONLY" -eq 1 ]; then info "--repair-only: lewati update"; else
   UPCMD="'$HERMES_BIN' update --yes ${BRANCH:+--branch '$BRANCH'} --backup"
-  if hb "hermes update (git pull + dependensi)" bash -c "$( [ "$OC_USER" = root ] && echo "env HOME='$STATE_DIR' HERMES_HOME='$STATE_DIR' bash -lc \"$UPCMD\"" || echo "sudo -u $OC_USER -H env HOME='$OC_HOME' HERMES_HOME='$STATE_DIR' bash -lc \"$UPCMD\"" )"; then
+  if hb "hermes update (git pull + dependensi)" run_hermes "$UPCMD"; then
     NEW_VER=$("$HERMES_BIN" --version 2>&1 | head -1)
     UPDATE_OK=1
     ok "update selesai ${GRY}(${HB_ELAPSED}s)${R} → ${B}$NEW_VER${R}"
@@ -345,7 +351,7 @@ else
     [ "${MPID:-0}" != 0 ] && ok "proses gateway hidup (pid $MPID)"
     if ss -tlnH 2>/dev/null | grep -q ":$PORT "; then ok "port :$PORT listening"
     else info "port :$PORT tidak dibuka — normal untuk gateway tanpa platform/HTTP (bukan tanda gagal)"; fi
-    ST_OUT=$(as_hermes "'$HERMES_BIN' status 2>&1 | head -6" 2>/dev/null || true)
+    ST_OUT=$(run_hermes "'$HERMES_BIN' status 2>&1 | head -6" 2>/dev/null || true)
     [ -n "$ST_OUT" ] && printf '%s\n' "$ST_OUT" | head -4 | sed 's/^/      /'
   else
     warn "service tidak aktif — cek log"
