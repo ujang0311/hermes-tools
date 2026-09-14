@@ -18,7 +18,7 @@
 # ============================================================================
 set -u -o pipefail
 
-VERSION_SCRIPT="1.1.0"
+VERSION_SCRIPT="1.2.0"
 SELF_URL="${HERMES_UPGRADE_URL:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main/hermes-upgrade.sh}"
 REPO_GIT="${HERMES_REPO_URL:-https://github.com/NousResearch/hermes-agent}"
 SERVICES_CANDIDATES=("${HERMES_SERVICE:-hermes-agent}" hermes-gateway hermes-dashboard)
@@ -164,6 +164,18 @@ PORT=$(printf '%s\n' "${UNIT_ENV:-}" | tr ' ' '\n' | sed -n 's/^HERMES_GATEWAY_P
 [ -n "${PORT:-}" ] || PORT="$DEFAULT_PORT"
 PY_VER=$("$VPY" -V 2>&1 | awk '{print $2}'); [ -n "$PY_VER" ] || PY_VER=$(python3 -V 2>&1 | awk '{print $2}')
 RUNMODE=$( [ -n "$SERVICE" ] && echo "systemd ($SCOPE)" || echo "manual" )
+fix_ownership(){ # pastikan source repo dimiliki user service & git aman dipakai user itu
+  local dir="$1"
+  [ -d "$dir/.git" ] || return 0
+  local owner; owner=$(stat -c %U "$dir" 2>/dev/null || echo root)
+  if [ "$owner" != "$OC_USER" ]; then
+    info "ownership repo: $owner → $OC_USER (dubious ownership = git menolak jalan)"
+    chown -R "$OC_USER:$OC_GROUP" "$dir" 2>/dev/null || true
+  fi
+  if [ "$OC_USER" = root ]; then git config --global --add safe.directory "$dir" 2>/dev/null || true
+  else sudo -u "$OC_USER" -H git config --global --add safe.directory "$dir" 2>/dev/null || true; fi
+  ok "ownership & safe.directory siap: $dir"
+}
 as_hermes(){ local cmd="$1"
   if [ "$OC_USER" = root ]; then env HOME="$STATE_DIR" HERMES_HOME="$STATE_DIR" bash -lc "$cmd"
   else sudo -u "$OC_USER" -H env HOME="$OC_HOME" HERMES_HOME="$STATE_DIR" bash -lc "cd $STATE_DIR 2>/dev/null; $cmd"; fi; }
@@ -217,6 +229,7 @@ if [ "$NEED_REPAIR" -eq 1 ]; then
     rm -rf "$TARGET_SRC.partial"
     if hb "clone source Hermes" git clone --depth 1 ${BRANCH:+--branch "$BRANCH"} "$REPO_GIT" "$TARGET_SRC.partial"; then
       rm -rf "$TARGET_SRC"; mv "$TARGET_SRC.partial" "$TARGET_SRC"; ok "source: $TARGET_SRC"
+      chown -R "$OC_USER:$OC_GROUP" "$TARGET_SRC" 2>/dev/null || true
     else tail -4 /tmp/hermes-upgrade-cmd.log | sed 's/^/      /'; rm -rf "$TARGET_SRC.partial"; die "git clone gagal"; fi
     if hb "pip install -e (perbaiki editable install)" "$VPIP" install -e "$TARGET_SRC"; then
       ok "editable install diperbaiki → $TARGET_SRC ${GRY}(${HB_ELAPSED}s)${R}"
@@ -283,7 +296,7 @@ else info "mode cek: dilewati"; fi
 # ══════════════════ [5/7] UPDATE ════════════════════════════════════════════
 printf "\n"; sec "[5/7] Update Hermes" "$(elapsed)"
 PREV_SHA=""
-[ -n "$SRC_DIR" ] && [ -d "$SRC_DIR/.git" ] && PREV_SHA=$(git -C "$SRC_DIR" rev-parse --short HEAD 2>/dev/null || true)
+[ -n "$SRC_DIR" ] && [ -d "$SRC_DIR/.git" ] && { fix_ownership "$SRC_DIR"; PREV_SHA=$(git -C "$SRC_DIR" rev-parse --short HEAD 2>/dev/null || true); }
 AVAIL=$(as_hermes "'$HERMES_BIN' update --check 2>&1 | tail -3" 2>/dev/null || true)
 kv "versi kini" "${CUR_VER:-?}"
 info "$(printf '%s' "$AVAIL" | tr '\n' ' ' | cut -c1-70)"
@@ -297,10 +310,12 @@ if [ "$REPAIR_ONLY" -eq 1 ]; then info "--repair-only: lewati update"; else
   UPCMD="'$HERMES_BIN' update --yes ${BRANCH:+--branch '$BRANCH'} --backup"
   if hb "hermes update (git pull + dependensi)" bash -c "$( [ "$OC_USER" = root ] && echo "env HOME='$STATE_DIR' HERMES_HOME='$STATE_DIR' bash -lc \"$UPCMD\"" || echo "sudo -u $OC_USER -H env HOME='$OC_HOME' HERMES_HOME='$STATE_DIR' bash -lc \"$UPCMD\"" )"; then
     NEW_VER=$("$HERMES_BIN" --version 2>&1 | head -1)
+    UPDATE_OK=1
     ok "update selesai ${GRY}(${HB_ELAPSED}s)${R} → ${B}$NEW_VER${R}"
   else
     tail -8 /tmp/hermes-upgrade-cmd.log | sed 's/^/      /'
-    warn "update gagal — instalasi tetap pada versi lama"
+    UPDATE_OK=0; warn "update gagal — instalasi tetap pada versi lama"
+    hint "cek penyebab di log di atas (mis. 'dubious ownership' → script sudah memperbaikinya, ulangi)"
   fi
 fi
 
@@ -356,6 +371,7 @@ _blc "source       $(_fit "${SRC_DIR:-?}" 38)" "  ${GRY}source${R}       $(_fit 
 _blc "hermes home  $(_fit "$STATE_DIR" 38)" "  ${GRY}hermes home${R}  $(_fit "$STATE_DIR" 38)"
 _blc "service      ${SERVICE:-manual} · port $PORT · $(svc_state)" "  ${GRY}service${R}      ${SERVICE:-manual} · port $PORT · $(svc_state)"
 [ -n "${ZIP:-}" ] && _blc "backup       $(basename "$ZIP")" "  ${GRY}backup${R}       $(basename "$ZIP")"
+[ "${UPDATE_OK:-1}" = 1 ] && _blc "update       berhasil" "  ${GRY}update${R}       ${GRN}berhasil${R}" || _blc "update       gagal (versi tidak berubah)" "  ${GRY}update${R}       ${YLW}gagal — versi tidak berubah${R}"
 _blc "durasi       $(elapsed)" "  ${GRY}durasi${R}       $(elapsed)"
 _blc "" ""; _foot "$GRN"
 printf "\n  ${GRY}Langkah berikutnya:${R}\n"
