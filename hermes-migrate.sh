@@ -12,12 +12,13 @@
 #  BACKUP  : curl -sS .../hermes-migrate.sh | bash -s -- backup
 #  RESTORE : curl -sS .../hermes-migrate.sh | bash -s -- restore --archive <zip> --safe-channels
 #
+#  Butuh: python3 (verifikasi zip otomatis pakai unzip bila ada)
 #  Opsi: --dry-run · --safe-channels · --no-start · --skip-verify · --no-transfer
 #  Bash >= 4.2
 # ============================================================================
 set -u -o pipefail
 
-VERSION_SCRIPT="1.1.0"
+VERSION_SCRIPT="1.2.0"
 SELF_URL="${HERMES_MIGRATE_URL:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main/hermes-migrate.sh}"
 REPO_RAW="${HERMES_TOOLS_RAW:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main}"
 SERVICES_CANDIDATES=("${HERMES_SERVICE:-hermes-agent}" hermes-gateway hermes-dashboard)
@@ -65,6 +66,24 @@ hb(){ local label="$1"; shift; local spin=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ �
   "$@" >/tmp/hermes-migrate-cmd.log 2>&1 & local pid=$!
   while kill -0 "$pid" 2>/dev/null; do printf "\r    ${PRP}%s${R} ${GRY}%s…${R} ${BLD}%ss${R}   " "${spin[$((i%10))]}" "$label" "$t"; sleep 1; i=$((i+1)); t=$((t+1)); done
   wait "$pid" || rc=$?; _clr; HB_ELAPSED=$t; return $rc; }
+zip_check(){ # $1 = file zip → 0 kalau valid (pakai unzip, fallback python)
+  local f="$1"
+  if command -v unzip >/dev/null 2>&1; then unzip -tq "$f"
+  else
+    python3 - "$f" <<'PY'
+import sys, zipfile
+try:
+    with zipfile.ZipFile(sys.argv[1]) as z:
+        bad = z.testzip(); n = len(z.infolist())
+    print(f"zip valid ({n} entri)")
+    sys.exit(0 if bad is None else 1)
+except Exception as e:
+    print(f"zip bermasalah: {e}"); sys.exit(1)
+PY
+  fi
+}
+zip_entries(){ if command -v unzip >/dev/null 2>&1; then unzip -l "$1" 2>/dev/null | tail -1 | awk '{print $2}'
+  else python3 -c "import zipfile,sys;print(len(zipfile.ZipFile(sys.argv[1]).infolist()))" "$1" 2>/dev/null || echo "?"; fi; }
 hsize(){ du -sh "$1" 2>/dev/null | cut -f1; }
 elapsed(){ printf '%ss' "$SECONDS"; }
 svc_state(){ local s; [ -n "${SERVICE:-}" ] || { printf 'n/a'; return; }; s=$(systemctl is-active "$SERVICE" 2>/dev/null); [ -n "$s" ] && printf '%s' "$s" || printf 'n/a'; }
@@ -254,7 +273,7 @@ if [ "$ACTION" = backup ]; then
   else
     if hb "membuat arsip zip" bash -c "$( [ "$OC_USER" = root ] && echo "env HOME='$STATE_DIR' HERMES_HOME='$STATE_DIR' bash -lc \"$CMD\"" || echo "sudo -u $OC_USER -H env HOME='$OC_HOME' HERMES_HOME='$STATE_DIR' bash -lc \"$CMD\"" )"; then
       ok "arsip jadi ${GRN}${B}$(basename "$ZIP")${R}  ${GRY}($(hsize "$ZIP") · ${HB_ELAPSED}s)${R}"
-      if hb "verifikasi isi zip" unzip -tq "$ZIP"; then ok "verifikasi zip OK"; else warn "verifikasi zip menemukan masalah"; fi
+      if hb "verifikasi isi zip" zip_check "$ZIP"; then ok "verifikasi zip OK"; else warn "verifikasi zip menemukan masalah"; fi
       grep -iE "restore with|excluded" /tmp/hermes-migrate-cmd.log 2>/dev/null | head -2 | sed 's/^/      /'
     else
       tail -5 /tmp/hermes-migrate-cmd.log | sed 's/^/      /'
@@ -291,7 +310,7 @@ TS=$(date +%Y%m%d-%H%M%S); PRE="/var/backups/hermes/pre-restore-$TS.tar.gz"; mkd
 printf "\n"
 sec "[1/7] Verifikasi arsip" "$(elapsed)"
 kv "arsip" "$(basename "$ARCHIVE") ($(hsize "$ARCHIVE"))"
-if hb "memeriksa isi zip" unzip -tq "$ARCHIVE"; then ok "zip valid ${GRY}(${HB_ELAPSED}s · $(unzip -l "$ARCHIVE" 2>/dev/null | tail -1 | awk '{print $2}') entri)${R}"
+if hb "memeriksa isi zip" zip_check "$ARCHIVE"; then ok "zip valid ${GRY}(${HB_ELAPSED}s · $(zip_entries "$ARCHIVE") entri)${R}"
 else
   if [ "$SKIP_VERIFY" -eq 1 ]; then warn "verifikasi gagal — --skip-verify aktif, lanjut"
   else tail -3 /tmp/hermes-migrate-cmd.log | sed 's/^/      /'; die "arsip TIDAK valid — restore dibatalkan (atau pakai --skip-verify)"; fi
