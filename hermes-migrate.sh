@@ -346,7 +346,17 @@ else info "HERMES_HOME belum ada — dilewati"; fi
 
 printf "\n"; sec "[5/7] Import arsip + remap path" "$(elapsed)"
 mkdir -p "$STATE_DIR"; chown "$OC_USER:$OC_GROUP" "$STATE_DIR" 2>/dev/null || true
-CMD="'$HERMES_BIN' import '$ARCHIVE' --force"
+# user service (mis. `hermes`) biasanya tidak bisa membaca /root/... → salin bila perlu
+IMP_ARCHIVE="$ARCHIVE"; COPIED_ARCHIVE=0
+if [ "$OC_USER" != root ]; then
+  if ! sudo -u "$OC_USER" -H test -r "$ARCHIVE" 2>/dev/null; then
+    IMP_ARCHIVE="$OC_HOME/$(basename "$ARCHIVE")"
+    info "salin arsip → $IMP_ARCHIVE (agar terbaca user $OC_USER)"
+    cp -f "$ARCHIVE" "$IMP_ARCHIVE" && chown "$OC_USER:$OC_GROUP" "$IMP_ARCHIVE" && chmod 600 "$IMP_ARCHIVE" && COPIED_ARCHIVE=1 \
+      || warn "gagal menyalin arsip — import mungkin gagal karena izin"
+  fi
+fi
+CMD="'$HERMES_BIN' import '$IMP_ARCHIVE' --force"
 if hb "hermes import (config, skill, sesi, memori)" bash -c "$( [ "$OC_USER" = root ] && echo "env HOME='$STATE_DIR' HERMES_HOME='$STATE_DIR' bash -lc \"$CMD\"" || echo "sudo -u $OC_USER -H env HOME='$OC_HOME' HERMES_HOME='$STATE_DIR' bash -lc \"$CMD\"" )"; then
   ok "import selesai ${GRY}(${HB_ELAPSED}s)${R}"
   grep -iE "restored|preserved|warning|skipped" /tmp/hermes-migrate-cmd.log | head -6 | sed 's/^/      /'
@@ -354,6 +364,7 @@ else
   tail -6 /tmp/hermes-migrate-cmd.log | sed 's/^/      /'; die "hermes import gagal"
 fi
 chown -R "$OC_USER:$OC_GROUP" "$STATE_DIR" 2>/dev/null || true
+[ "$COPIED_ARCHIVE" = 1 ] && rm -f "$IMP_ARCHIVE"
 
 # path lokal server lama di dalam DB/transcript → petakan ke lokasi baru (otomatis)
 OLDP=$(python3 - "$STATE_DIR" <<'PY' 2>/dev/null || true
