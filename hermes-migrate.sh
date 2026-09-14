@@ -2,6 +2,9 @@
 # ============================================================================
 #  ⬢ hermes-migrate.sh — backup & restore/migrasi Hermes Agent antar server
 #  Repo: https://github.com/ujang0311/hermes-tools
+#  Ambil versi TERBARU (menghindari cache CDN):
+#    curl -sS -H 'Accept: application/vnd.github.raw' \
+#      'https://api.github.com/repos/ujang0311/hermes-tools/contents/hermes-migrate.sh?ref=main' | bash -s -- detect
 #
 #  Semua path (HERMES_HOME, user, install dir, service, port) DETEKSI OTOMATIS.
 #
@@ -14,7 +17,7 @@
 # ============================================================================
 set -u -o pipefail
 
-VERSION_SCRIPT="1.0.0"
+VERSION_SCRIPT="1.1.0"
 SELF_URL="${HERMES_MIGRATE_URL:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main/hermes-migrate.sh}"
 REPO_RAW="${HERMES_TOOLS_RAW:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main}"
 SERVICES_CANDIDATES=("${HERMES_SERVICE:-hermes-agent}" hermes-gateway hermes-dashboard)

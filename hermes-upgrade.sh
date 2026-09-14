@@ -2,6 +2,9 @@
 # ============================================================================
 #  ⬢ hermes-upgrade.sh — perbaiki + upgrade Hermes Agent (auto-detect path)
 #  Repo: https://github.com/ujang0311/hermes-tools
+#  Ambil versi TERBARU (menghindari cache CDN):
+#    curl -sS -H 'Accept: application/vnd.github.raw' \
+#      'https://api.github.com/repos/ujang0311/hermes-tools/contents/hermes-migrate.sh?ref=main' | bash -s -- detect
 #
 #  CEK   : curl -sS .../hermes-upgrade.sh | bash -s -- --check
 #  PERBAIKI + UPGRADE : curl -sS .../hermes-upgrade.sh | bash
@@ -15,7 +18,7 @@
 # ============================================================================
 set -u -o pipefail
 
-VERSION_SCRIPT="1.0.0"
+VERSION_SCRIPT="1.1.0"
 SELF_URL="${HERMES_UPGRADE_URL:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main/hermes-upgrade.sh}"
 REPO_GIT="${HERMES_REPO_URL:-https://github.com/NousResearch/hermes-agent}"
 SERVICES_CANDIDATES=("${HERMES_SERVICE:-hermes-agent}" hermes-gateway hermes-dashboard)
