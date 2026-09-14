@@ -384,25 +384,32 @@ fi
 printf "\n"; sec "[7/7] Jalankan service + health check" "$(elapsed)"
 GW_OK=0
 if [ "$NO_START" -eq 1 ]; then info "--no-start: service tidak dinyalakan"
-else
-  if [ -n "$SERVICE" ]; then systemctl ${SCOPE:+$([ "$SCOPE" = user ] && echo --user)} start "$SERVICE"
-  else info "mode manual — jalankan sendiri: $HERMES_BIN gateway" ; fi
+elif [ -n "$SERVICE" ]; then
+  systemctl ${SCOPE:+$([ "$SCOPE" = user ] && echo --user)} restart "$SERVICE"
   WMAX="${HERMES_START_TIMEOUT:-180}"; W=0
   while [ "$W" -lt "$WMAX" ]; do
-    ss -tlnH 2>/dev/null | grep -q ":$PORT " && { GW_OK=1; break; }
-    printf "\r    ${PRP}⠿${R} ${GRY}menunggu gateway siap…${R} ${BLD}%ss${R} ${GRY}(service: %s)${R}   " "$W" "$(svc_state)"
+    ST=$(svc_state); [ "$ST" = active ] && { GW_OK=1; break; }; [ "$ST" = failed ] && break
+    printf "\r    ${PRP}⠿${R} ${GRY}menunggu service aktif…${R} ${BLD}%ss${R} ${GRY}(status: %s)${R}   " "$W" "$ST"
     sleep 3; W=$((W+3))
   done
   _clr
-  [ "$GW_OK" -eq 1 ] && ok "gateway listening :$PORT ${GRY}(${W}s)${R}" || warn "port :$PORT belum listen setelah ${WMAX}s"
-  CODE=000; for i in 1 2 3 4 5; do CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 8 "http://127.0.0.1:$PORT/" 2>/dev/null || echo 000); [ "$CODE" != 000 ] && break; sleep 3; done
-  [ "$CODE" != 000 ] && ok "gateway merespons (HTTP $CODE)" || info "tidak ada respons HTTP di :$PORT (wajar bila dashboard terpisah)"
-  if [ -n "$SERVICE" ] && [ "$GW_OK" -eq 0 ]; then
-    info "6 baris log terakhir:"; journalctl ${SCOPE:+$([ "$SCOPE" = user ] && echo --user)} -u "$SERVICE" -n 6 --no-pager 2>/dev/null | tail -6 | sed 's/^/      /'
+  if [ "$GW_OK" -eq 1 ]; then
+    ok "service aktif ${GRY}(${W}s)${R}"
+    if ss -tlnH 2>/dev/null | grep -q ":$PORT "; then ok "port :$PORT listening"
+    else info "port :$PORT tidak dibuka — normal untuk gateway tanpa platform/HTTP"; fi
+    as_hermes "'$HERMES_BIN' status 2>&1 | head -4" 2>/dev/null | sed 's/^/      /'
+  else
+    warn "service tidak aktif setelah ${WMAX}s"
+    journalctl ${SCOPE:+$([ "$SCOPE" = user ] && echo --user)} -u "$SERVICE" -n 8 --no-pager 2>/dev/null | tail -8 | sed 's/^/      /'
   fi
+else
+  pkill -f "hermes.*(gateway|serve)" >/dev/null 2>&1 || true
+  ( "$HERMES_BIN" gateway run --replace >/tmp/hermes-gateway-manual.log 2>&1 & ) 2>/dev/null || true
+  sleep 8
+  pgrep -f "hermes.*gateway" >/dev/null 2>&1 && { GW_OK=1; ok "gateway jalan (mode manual)"; } || warn "gateway manual tidak terdeteksi"
 fi
 
-if [ "$NO_START" -eq 0 ] && [ -n "$SERVICE" ] && [ "$GW_OK" -eq 0 ]; then
+if [ "$NO_START" -eq 0 ] && [ -n "$SERVICE" ] && [ "$GW_OK" -eq 0 ] && [ "$(svc_state)" != active ]; then
   printf "\n"; sec "Rollback" "$(elapsed)"
   systemctl ${SCOPE:+$([ "$SCOPE" = user ] && echo --user)} stop "$SERVICE" 2>/dev/null || true
   [ -f "$PRE" ] && tar xzf "$PRE" -C "$(dirname "$STATE_DIR")" && chown -R "$OC_USER:$OC_GROUP" "$STATE_DIR" && ok "kondisi lama dipulihkan dari $PRE"

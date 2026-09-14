@@ -305,25 +305,38 @@ fi
 printf "\n"; sec "[6/7] Jalankan service + health check" "$(elapsed)"
 GW_OK=0
 if [ "$DO_RESTART" -eq 0 ]; then info "--no-restart: service tidak dijalankan"
-elif [ -z "$SERVICE" ]; then info "mode manual — jalankan sendiri: $HERMES_BIN gateway"
+elif [ -z "$SERVICE" ]; then
+  pkill -f "hermes.*(gateway|serve)" >/dev/null 2>&1 || true
+  ( "$HERMES_BIN" gateway run --replace >/tmp/hermes-gateway-manual.log 2>&1 & ) 2>/dev/null || true
+  sleep 8
+  pgrep -f "hermes.*gateway" >/dev/null 2>&1 && { GW_OK=1; ok "gateway jalan (mode manual)"; } || warn "gateway manual tidak terdeteksi"
 else
   systemctl_scoped restart "$SERVICE"
   WMAX="${HERMES_START_TIMEOUT:-180}"; W=0
   while [ "$W" -lt "$WMAX" ]; do
-    ss -tlnH 2>/dev/null | grep -q ":$PORT " && { GW_OK=1; break; }
-    ST=$(svc_state); [ "$ST" = failed ] && { bad "service gagal start (status: failed)"; break; }
-    printf "\r    ${PRP}⠿${R} ${GRY}menunggu gateway siap…${R} ${BLD}%ss${R} ${GRY}(service: %s)${R}   " "$W" "$ST"
+    ST=$(svc_state)
+    [ "$ST" = active ] && { GW_OK=1; break; }
+    [ "$ST" = failed ] && { bad "service gagal start (status: failed)"; break; }
+    printf "\r    ${PRP}⠿${R} ${GRY}menunggu service aktif…${R} ${BLD}%ss${R} ${GRY}(status: %s)${R}   " "$W" "$ST"
     sleep 3; W=$((W+3))
   done
   _clr
-  [ "$GW_OK" -eq 1 ] && ok "service aktif, port :$PORT listening ${GRY}(${W}s)${R}" || warn "port :$PORT belum listen setelah ${WMAX}s"
-  if [ "$GW_OK" -eq 0 ]; then
+  if [ "$GW_OK" -eq 1 ]; then
+    ok "service aktif ${GRY}(${W}s)${R}"
+    MPID=$(systemctl_scoped show "$SERVICE" -p MainPID --value 2>/dev/null || echo 0)
+    [ "${MPID:-0}" != 0 ] && ok "proses gateway hidup (pid $MPID)"
+    if ss -tlnH 2>/dev/null | grep -q ":$PORT "; then ok "port :$PORT listening"
+    else info "port :$PORT tidak dibuka — normal untuk gateway tanpa platform/HTTP (bukan tanda gagal)"; fi
+    ST_OUT=$(as_hermes "'$HERMES_BIN' status 2>&1 | head -6" 2>/dev/null || true)
+    [ -n "$ST_OUT" ] && printf '%s\n' "$ST_OUT" | head -4 | sed 's/^/      /'
+  else
+    warn "service tidak aktif — cek log"
     info "8 baris log terakhir:"; journalctl_scoped -u "$SERVICE" -n 8 --no-pager 2>/dev/null | tail -8 | sed 's/^/      /'
   fi
 fi
 
 # ══════════════════ [7/7] ROLLBACK BILA GAGAL ═══════════════════════════════
-if [ "$DO_RESTART" -eq 1 ] && [ -n "$SERVICE" ] && [ "$GW_OK" -eq 0 ] && [ -n "$PREV_SHA" ]; then
+if [ "$DO_RESTART" -eq 1 ] && [ -n "$SERVICE" ] && [ "$GW_OK" -eq 0 ] && [ -n "$PREV_SHA" ] && [ "$(svc_state)" != active ]; then
   printf "\n"; sec "[7/7] Rollback kode ke $PREV_SHA" "$(elapsed)"
   systemctl_scoped stop "$SERVICE" 2>/dev/null || true
   if hb "kembalikan kode" git -C "$SRC_DIR" reset --hard "$PREV_SHA"; then ok "kode kembali ke $PREV_SHA"; else bad "git reset gagal"; fi
