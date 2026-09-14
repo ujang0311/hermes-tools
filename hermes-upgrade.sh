@@ -18,7 +18,7 @@
 # ============================================================================
 set -u -o pipefail
 
-VERSION_SCRIPT="1.4.0"
+VERSION_SCRIPT="1.4.1"
 SELF_URL="${HERMES_UPGRADE_URL:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main/hermes-upgrade.sh}"
 REPO_GIT="${HERMES_REPO_URL:-https://github.com/NousResearch/hermes-agent}"
 SERVICES_CANDIDATES=("${HERMES_SERVICE:-hermes-agent}" hermes-gateway hermes-dashboard)
@@ -143,6 +143,8 @@ if [ -n "$SERVICE" ]; then
 fi
 [ -n "${GW_PID:-}" ] && [ "${GW_PID:-0}" = 0 ] && GW_PID=""
 [ -z "${GW_PID:-}" ] && GW_PID=$(pgrep -f "hermes.*(gateway|serve)" 2>/dev/null | head -1 || true)
+SRC_SVC="tidak ada unit systemd"
+[ -n "$SERVICE" ] && SRC_SVC="unit $SCOPE"
 SRC_STATE=""
 if [ -n "${HERMES_HOME:-}" ]; then STATE_DIR="$HERMES_HOME"; SRC_STATE="env HERMES_HOME"
 else

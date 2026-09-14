@@ -18,7 +18,7 @@
 # ============================================================================
 set -u -o pipefail
 
-VERSION_SCRIPT="1.4.0"
+VERSION_SCRIPT="1.4.1"
 SELF_URL="${HERMES_MIGRATE_URL:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main/hermes-migrate.sh}"
 REPO_RAW="${HERMES_TOOLS_RAW:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main}"
 SERVICES_CANDIDATES=("${HERMES_SERVICE:-hermes-agent}" hermes-gateway hermes-dashboard)
@@ -202,6 +202,8 @@ if [ -n "$SERVICE" ]; then
 fi
 [ -n "${GW_PID:-}" ] && [ "${GW_PID:-0}" = 0 ] && GW_PID=""
 [ -z "${GW_PID:-}" ] && GW_PID=$(pgrep -f "hermes.*(gateway|serve)" 2>/dev/null | head -1 || true)
+SRC_SVC="tidak ada unit systemd"
+[ -n "$SERVICE" ] && SRC_SVC="unit $SCOPE"
   # ── HERMES_HOME: override → env → unit → env proses → CLI → pemindaian
   SRC_STATE=""
   if [ -n "$STATE_DIR" ]; then SRC_STATE="override (--hermes-home)"
