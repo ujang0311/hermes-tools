@@ -18,7 +18,7 @@
 # ============================================================================
 set -u -o pipefail
 
-VERSION_SCRIPT="1.3.0"
+VERSION_SCRIPT="1.4.0"
 SELF_URL="${HERMES_UPGRADE_URL:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main/hermes-upgrade.sh}"
 REPO_GIT="${HERMES_REPO_URL:-https://github.com/NousResearch/hermes-agent}"
 SERVICES_CANDIDATES=("${HERMES_SERVICE:-hermes-agent}" hermes-gateway hermes-dashboard)
@@ -115,20 +115,34 @@ if [ -n "$VENV" ]; then VPY="$VENV/bin/python"; VPIP="$VENV/bin/pip"; INSTALL_DI
 else INSTALL_DIR=$(dirname "$HERMES_BIN"); VPY=$(command -v python3); VPIP=$(command -v pip3); fi
 
 SERVICE=""; SCOPE=""; UNIT_ENV=""; GW_PID=""
-for cand in "${SERVICES_CANDIDATES[@]}"; do
-  if systemctl cat "$cand" >/dev/null 2>&1; then SERVICE="$cand"; SCOPE="system"; break
-  elif systemctl --user cat "$cand" >/dev/null 2>&1; then SERVICE="$cand"; SCOPE="user"; break; fi
+# pilih unit yang AKTIF lebih dulu (system → user), baru yang sekadar ada
+for phase in active any; do
+  for sc in system user; do
+    for cand in "${SERVICES_CANDIDATES[@]}"; do
+      if [ "$sc" = system ]; then systemctl cat "$cand" >/dev/null 2>&1 || continue
+      else systemctl --user cat "$cand" >/dev/null 2>&1 || continue; fi
+      if [ "$phase" = active ]; then
+        if [ "$sc" = system ]; then st=$(systemctl is-active "$cand" 2>/dev/null)
+        else st=$(systemctl --user is-active "$cand" 2>/dev/null); fi
+        [ "$st" = active ] || continue
+      fi
+      SERVICE="$cand"; SCOPE="$sc"; break 2
+    done
+  done
+  [ -n "$SERVICE" ] && break
 done
 if [ -n "$SERVICE" ]; then
-  if [ "$SCOPE" = user ]; then UNIT_ENV=$(systemctl --user show "$SERVICE" -p Environment --value 2>/dev/null || echo "")
-  else UNIT_ENV=$(systemctl show "$SERVICE" -p Environment --value 2>/dev/null || echo "")
-       OC_USER=$(systemctl show "$SERVICE" -p User --value 2>/dev/null || true); fi
-  GW_PID=$( { [ "$SCOPE" = user ] && systemctl --user show "$SERVICE" -p MainPID --value; } 2>/dev/null || true )
-  [ -z "$GW_PID" ] && [ "$SCOPE" = system ] && GW_PID=$(systemctl show "$SERVICE" -p MainPID --value 2>/dev/null || true)
+  if [ "$SCOPE" = user ]; then
+    UNIT_ENV=$(systemctl --user show "$SERVICE" -p Environment --value 2>/dev/null || echo "")
+    GW_PID=$(systemctl --user show "$SERVICE" -p MainPID --value 2>/dev/null || true)
+  else
+    UNIT_ENV=$(systemctl show "$SERVICE" -p Environment --value 2>/dev/null || echo "")
+    OC_USER=$(systemctl show "$SERVICE" -p User --value 2>/dev/null || true)
+    GW_PID=$(systemctl show "$SERVICE" -p MainPID --value 2>/dev/null || true)
+  fi
 fi
 [ -n "${GW_PID:-}" ] && [ "${GW_PID:-0}" = 0 ] && GW_PID=""
 [ -z "${GW_PID:-}" ] && GW_PID=$(pgrep -f "hermes.*(gateway|serve)" 2>/dev/null | head -1 || true)
-
 SRC_STATE=""
 if [ -n "${HERMES_HOME:-}" ]; then STATE_DIR="$HERMES_HOME"; SRC_STATE="env HERMES_HOME"
 else
