@@ -175,7 +175,7 @@ tree "└" "service      ${SERVICE:-tidak ada} · port $PORT · ${GRN}$(svc_stat
 
 # ══════════════════ [2/7] KESEHATAN INSTALASI (editable install) ════════════
 printf "\n"; sec "[2/7] Cek instalasi & self-heal" "$(elapsed)"
-CUR_VER=$(as_hermes "'$HERMES_BIN' --version 2>/dev/null | head -1" 2>/dev/null || true)
+CUR_VER=$("$HERMES_BIN" --version 2>/dev/null | head -1 || true)
 CLI_OK=0; "$HERMES_BIN" --version >/dev/null 2>&1 && CLI_OK=1
 EDIT_TARGET=$(find "$VENV/lib" -name "__editable__*_finder.py" 2>/dev/null | head -1)
 EDIT_PATH=""

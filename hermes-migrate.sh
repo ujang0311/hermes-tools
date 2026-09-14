@@ -146,7 +146,7 @@ if [ -z "$VENV" ]; then
 fi
 if [ -n "$VENV" ]; then VPY="$VENV/bin/python"; VPIP="$VENV/bin/pip"; INSTALL_DIR=$(dirname "$VENV")
 else INSTALL_DIR=$(dirname "$HERMES_BIN"); VPY=$(command -v python3); VPIP=$(command -v pip3); fi
-  HERMES_VER=$("$HERMES_BIN" --version 2>&1 | head -1)
+  if HERMES_VER=$("$HERMES_BIN" --version 2>/dev/null | head -1) && [ -n "$HERMES_VER" ]; then :; else HERMES_VER=""; fi
   PY_VER=$("$VPY" -V 2>&1 | awk '{print $2}')
   [ -n "$PY_VER" ] || PY_VER=$(python3 -V 2>&1 | awk '{print $2}')
 
@@ -225,7 +225,8 @@ show_detect(){
   tree "├" "hermes home  ${B}$STATE_DIR${R}$( [ -d "$STATE_DIR" ] && echo "  ${GRY}($(hsize "$STATE_DIR"))${R}" || echo "  ${YLW}(belum ada)${R}" )"
   tree "│" "${GRY}└ sumber      $SRC_STATE${R}"
   tree "├" "owner        ${OC_USER}:${OC_GROUP}  ${GRY}(${SRC_USER})${R}"
-  tree "├" "versi        ${HERMES_VER}"
+  if [ -n "$HERMES_VER" ]; then tree "├" "versi        ${HERMES_VER}"
+  else tree "├" "versi        ${YLW}CLI rusak/tidak lengkap — perlu self-heal${R}${GRY} (hermes-upgrade.sh)${R}"; fi
   tree "├" "install dir  $INSTALL_DIR  ${GRY}(python $PY_VER)${R}"
   tree "├" "service      ${SERVICE:-tidak ada}  ${GRY}(${SRC_SVC}) · port $PORT · ${GRN}$(svc_state)${R}"
   tree "└" "cli          ${GRY}$HERMES_BIN${R}"
