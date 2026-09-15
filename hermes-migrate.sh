@@ -210,7 +210,8 @@ SRC_SVC="tidak ada unit systemd"
   is_home(){ # home Hermes yang sah: ada config.yaml / state.db / (sessions+skills)
     [ -d "$1" ] && { [ -f "$1/config.yaml" ] || [ -f "$1/state.db" ] || { [ -d "$1/sessions" ] && [ -d "$1/skills" ]; }; }
   }
-  STATE_WARN=""
+  STATE_DIR="${STATE_DIR:-}"
+STATE_WARN=""
   V_UNIT=$(printf '%s\n' "${UNIT_ENV:-}" | tr ' ' '\n' | sed -n 's/^HERMES_HOME=//p' | head -1)
   V_UNIT_HOME=$(printf '%s\n' "${UNIT_ENV:-}" | tr ' ' '\n' | sed -n 's/^HOME=//p' | head -1)
   V_PROC=""; V_PROC_HOME=""
@@ -222,7 +223,7 @@ SRC_SVC="tidak ada unit systemd"
   [ -n "${V_CLI:-}" ] && V_CLI=$(dirname "$V_CLI")
 
   SRC_STATE=""
-  if [ -n "$STATE_DIR" ]; then SRC_STATE="override (--hermes-home)"
+  if [ -n "${STATE_DIR:-}" ]; then SRC_STATE="override (--hermes-home)"
   elif [ -n "${V_UNIT:-}" ] && is_home "$V_UNIT"; then STATE_DIR="$V_UNIT"; SRC_STATE="unit systemd"
   elif [ -n "${HERMES_HOME:-}" ] && is_home "$HERMES_HOME"; then STATE_DIR="$HERMES_HOME"; SRC_STATE="env HERMES_HOME"
   elif [ -n "${V_PROC:-}" ] && is_home "$V_PROC"; then STATE_DIR="$V_PROC"; SRC_STATE="proses gateway (pid $GW_PID)"
