@@ -26,7 +26,7 @@ BACKUP_DIR_DEFAULT="${HERMES_BACKUP_DIR:-/root/hermes-backups}"
 DEFAULT_PORT="${HERMES_GATEWAY_PORT:-18790}"
 
 ACTION="${1:-}"; [ $# -gt 0 ] && shift || true
-DRY_RUN=0; STATE_DIR="" ; OC_USER=""; TRANSFER=""; ARCHIVE=""; SAFE_CH=0; NO_START=0; SKIP_VERIFY=0
+DRY_RUN=0; NO_REPAIR=0; STATE_DIR="" ; OC_USER=""; TRANSFER=""; ARCHIVE=""; SAFE_CH=0; NO_START=0; SKIP_VERIFY=0
 
 # ── UI ──────────────────────────────────────────────────────────────────────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -99,6 +99,7 @@ usage(){ _banner; cat <<EOF
     hermes-migrate.sh restore --archive FILE [opsi]
       --safe-channels   matikan platform (telegram/discord/whatsapp/slack) setelah restore
       --no-start        jangan nyalakan gateway (uji aman)
+      --no-repair       jangan jalankan perbaikan instalasi otomatis
       --skip-verify     lanjut walau verifikasi zip gagal
       --no-transfer     (backup) cukup buat arsip, jangan kirim
 
@@ -123,6 +124,7 @@ while [ $# -gt 0 ]; do
     --safe-channels) SAFE_CH=1 ;;
     --no-start) NO_START=1 ;;
     --skip-verify) SKIP_VERIFY=1 ;;
+    --no-repair) NO_REPAIR=1 ;;
     --no-transfer) NO_TRANSFER=1 ;;
     --dry-run) DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -205,28 +207,38 @@ fi
 SRC_SVC="tidak ada unit systemd"
 [ -n "$SERVICE" ] && SRC_SVC="unit $SCOPE"
   # ── HERMES_HOME: override → env → unit → env proses → CLI → pemindaian
+  is_home(){ # home Hermes yang sah: ada config.yaml / state.db / (sessions+skills)
+    [ -d "$1" ] && { [ -f "$1/config.yaml" ] || [ -f "$1/state.db" ] || { [ -d "$1/sessions" ] && [ -d "$1/skills" ]; }; }
+  }
+  STATE_WARN=""
+  V_UNIT=$(printf '%s\n' "${UNIT_ENV:-}" | tr ' ' '\n' | sed -n 's/^HERMES_HOME=//p' | head -1)
+  V_UNIT_HOME=$(printf '%s\n' "${UNIT_ENV:-}" | tr ' ' '\n' | sed -n 's/^HOME=//p' | head -1)
+  V_PROC=""; V_PROC_HOME=""
+  if [ -n "${GW_PID:-}" ] && [ -r "/proc/$GW_PID/environ" ]; then
+    V_PROC=$(tr '\0' '\n' < "/proc/$GW_PID/environ" 2>/dev/null | sed -n 's/^HERMES_HOME=//p' | head -1)
+    V_PROC_HOME=$(tr '\0' '\n' < "/proc/$GW_PID/environ" 2>/dev/null | sed -n 's/^HOME=//p' | head -1)
+  fi
+  V_CLI=$("$HERMES_BIN" config path 2>/dev/null | grep -oE '/[^ ]*config\.yaml' | head -1)
+  [ -n "${V_CLI:-}" ] && V_CLI=$(dirname "$V_CLI")
+
   SRC_STATE=""
   if [ -n "$STATE_DIR" ]; then SRC_STATE="override (--hermes-home)"
-  elif [ -n "${HERMES_HOME:-}" ]; then STATE_DIR="$HERMES_HOME"; SRC_STATE="env HERMES_HOME"
+  elif [ -n "${V_UNIT:-}" ] && is_home "$V_UNIT"; then STATE_DIR="$V_UNIT"; SRC_STATE="unit systemd"
+  elif [ -n "${HERMES_HOME:-}" ] && is_home "$HERMES_HOME"; then STATE_DIR="$HERMES_HOME"; SRC_STATE="env HERMES_HOME"
+  elif [ -n "${V_PROC:-}" ] && is_home "$V_PROC"; then STATE_DIR="$V_PROC"; SRC_STATE="proses gateway (pid $GW_PID)"
+  elif [ -n "${V_CLI:-}" ] && is_home "$V_CLI"; then STATE_DIR="$V_CLI"; SRC_STATE="CLI (hermes config path)"
   else
-    v=$(printf '%s\n' "${UNIT_ENV:-}" | tr ' ' '\n' | sed -n 's/^HERMES_HOME=//p' | head -1)
-    if [ -n "${v:-}" ]; then STATE_DIR="$v"; SRC_STATE="unit systemd"
-    elif [ -n "${GW_PID:-}" ] && [ -r "/proc/$GW_PID/environ" ]; then
-      v=$(tr '\0' '\n' < "/proc/$GW_PID/environ" 2>/dev/null | sed -n 's/^HERMES_HOME=//p' | head -1)
-      if [ -n "${v:-}" ]; then STATE_DIR="$v"; SRC_STATE="proses gateway (pid $GW_PID)"
-      else v=$(tr '\0' '\n' < "/proc/$GW_PID/environ" 2>/dev/null | sed -n 's/^HOME=//p' | head -1)
-        [ -n "${v:-}" ] && { STATE_DIR="$v/.hermes"; SRC_STATE="HOME proses gateway (pid $GW_PID)"; }
-      fi
-    fi
+    for c in ${V_UNIT_HOME:+"$V_UNIT_HOME"} ${V_PROC_HOME:+"$V_PROC_HOME/.hermes"} /home/hermes /root/.hermes /opt/hermes-agent/.hermes /opt/hermes/.hermes /home/*/.hermes; do
+      [ -n "$c" ] && is_home "$c" && { STATE_DIR="$c"; SRC_STATE="pemindaian filesystem"; break; }
+    done
   fi
   if [ -z "${STATE_DIR:-}" ]; then
-    v=$("$HERMES_BIN" config path 2>/dev/null | grep -oE '/[^ ]*config\.yaml' | head -1)
-    if [ -n "${v:-}" ]; then STATE_DIR="$(dirname "$v")"; SRC_STATE="CLI (hermes config path)"
-    else
-      for c in /home/hermes /root/.hermes /opt/hermes-agent/.hermes /opt/hermes/.hermes /home/*/.hermes; do
-        { [ -f "$c/config.yaml" ] || [ -f "$c/state.db" ]; } && { STATE_DIR="$c"; SRC_STATE="pemindaian filesystem"; break; }
-      done
-    fi
+    STATE_DIR="${HERMES_HOME:-${V_UNIT:-${V_PROC:-/root/.hermes}}}"
+    SRC_STATE="fallback (home belum ada)"; STATE_WARN="home Hermes belum ada (tanpa config.yaml/state.db)"
+  fi
+  # env HERMES_HOME yang menunjuk install dir (mis. /opt/hermes-agent dari /etc/profile.d) diabaikan
+  if [ -n "${HERMES_HOME:-}" ] && [ "$HERMES_HOME" != "$STATE_DIR" ] && ! is_home "$HERMES_HOME"; then
+    STATE_WARN="env HERMES_HOME=$HERMES_HOME diabaikan (bukan home Hermes: tanpa config.yaml/state.db)"
   fi
   [ -n "${STATE_DIR:-}" ] || STATE_DIR="/root/.hermes"
 
@@ -264,6 +276,7 @@ show_detect(){
   sec "Deteksi otomatis" "$(elapsed)"
   tree "├" "hermes home  ${B}$STATE_DIR${R}$( [ -d "$STATE_DIR" ] && echo "  ${GRY}($(hsize "$STATE_DIR"))${R}" || echo "  ${YLW}(belum ada)${R}" )"
   tree "│" "${GRY}└ sumber      $SRC_STATE${R}"
+  [ -n "${STATE_WARN:-}" ] && tree "│" "${YLW}⚠ $STATE_WARN${R}"
   tree "├" "owner        ${OC_USER}:${OC_GROUP}  ${GRY}(${SRC_USER})${R}"
   if [ -n "$HERMES_VER" ]; then tree "├" "versi        ${HERMES_VER}"
   else tree "├" "versi        ${YLW}CLI rusak/tidak lengkap — perlu self-heal${R}${GRY} (hermes-upgrade.sh)${R}"; fi
@@ -276,6 +289,31 @@ detect
 _banner
 [ "$ACTION" = detect ] && { show_detect; printf "\n  ${GRY}Tidak ada perubahan (mode deteksi).${R}\n\n"; exit 0; }
 show_detect
+
+# ── CLI rusak (ModuleNotFoundError dll) → self-heal otomatis, supaya backup/restore jalan
+if ! "$HERMES_BIN" --version >/dev/null 2>&1; then
+  printf "\n"; sec "Instalasi Hermes rusak" "$(elapsed)"
+  bad "CLI tidak bisa dijalankan: $HERMES_BIN"
+  if [ "${NO_REPAIR:-0}" -eq 1 ]; then
+    warn "--no-repair: perbaikan otomatis dilewati (backup/restore kemungkinan gagal)"
+  elif [ "$DRY_RUN" -eq 1 ]; then
+    info "dry-run: akan menjalankan self-heal (hermes-upgrade.sh --repair-only)"
+  else
+    info "menjalankan self-heal otomatis (hermes-upgrade.sh --repair-only) …"
+    TMPU=$(mktemp /tmp/hermes-upgrade-XXXXXX)
+    if curl -fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/ujang0311/hermes-tools/contents/hermes-upgrade.sh?ref=main" -o "$TMPU" 2>/dev/null \
+       || curl -fsSL "$REPO_RAW/hermes-upgrade.sh" -o "$TMPU" 2>/dev/null; then
+      bash "$TMPU" --repair-only || warn "self-heal melaporkan kegagalan — lihat pesan di atas"
+    else warn "tidak bisa mengunduh hermes-upgrade.sh (cek koneksi GitHub)"; fi
+    rm -f "$TMPU"
+    if "$HERMES_BIN" --version >/dev/null 2>&1; then
+      HERMES_VER=$("$HERMES_BIN" --version 2>&1 | head -1)
+      ok "CLI sehat kembali: $HERMES_VER"
+    else
+      bad "CLI masih rusak — jalankan manual: bash hermes-upgrade.sh"
+    fi
+  fi
+fi
 
 # ══════════════════════════════ BACKUP ═════════════════════════════════════
 if [ "$ACTION" = backup ]; then
