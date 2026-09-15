@@ -75,6 +75,10 @@ Contoh keluaran (VM App Catalog, tanpa flag):
 
 | Gejala | Sebab sebenarnya | Penanganan |
 |---|---|---|
+| CLI rusak saat user cuma mau backup | instalasi App Catalog rusak | `hermes-migrate.sh` menjalankan self-heal otomatis (lewati dengan `--no-repair`) |
+| Env `HERMES_HOME` menunjuk install dir (`/opt/hermes-agent`) | `/etc/profile.d` salah set | kandidat home divalidasi (`config.yaml`/`state.db`); prioritas unit systemd → env valid → proses → CLI → pemindaian |
+| Unduhan GitHub sangat lambat (±0,7 MB/menit) | routing VM buruk | relay: `git clone --depth 1` di mesin lain → `tar czf --exclude=.git --exclude=venv` → pipe SSH (`cat x.tgz | ssh root@VM 'tar xzf - -C /root'`) → `--source-archive` |
+| `scp: Connection closed` ke VM App Catalog | scp/SFTP ditolak | kirim lewat pipe SSH seperti di atas |
 | `ModuleNotFoundError: No module named 'hermes_cli'`, service crash-loop | instalasi App Catalog berupa *editable install* menunjuk `/tmp/hermes-agent-clone` yang hilang saat reboot | `hermes-upgrade.sh` clone ulang ke `$INSTALL_DIR/source` (permanen) + `pip install -e` |
 | `hermes import` sukses tapi data tidak terpakai gateway | **login shell** (`bash -lc`) mereset `HERMES_HOME` → import mendarat di install dir | script memakai **non-login shell** + `export HERMES_HOME` + verifikasi lokasi + pemindahan otomatis |
 | `PermissionError: … /root/hermes-*.zip` | user service tidak bisa membaca `/root` | arsip disalin ke home user service sebelum import |
@@ -93,6 +97,7 @@ hermes-migrate.sh restore --archive FILE
     [--safe-channels] [--no-start] [--skip-verify] [--state-dir DIR] [--user USER] [--dry-run]
 
 hermes-upgrade.sh [--check] [--repair-only] [--branch NAME] [--no-backup] [--no-restart] [--dry-run]
+hermes-upgrade.sh --repair-only --source-archive /root/hermes-src.tgz   # VM yang lambat ke GitHub
 ```
 
 Env: `HERMES_HOME`, `HERMES_SERVICE`, `HERMES_BACKUP_DIR`, `HERMES_START_TIMEOUT`, `HERMES_INSTALL_DIR`.
