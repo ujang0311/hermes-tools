@@ -286,16 +286,34 @@ if [ "$ACTION" = backup ]; then
   mkdir -p "$BACKUP_DIR_DEFAULT"; chmod 700 "$BACKUP_DIR_DEFAULT" 2>/dev/null || true
   chown "$OC_USER:$OC_GROUP" "$BACKUP_DIR_DEFAULT" 2>/dev/null || true
   TS=$(date +%Y%m%d-%H%M%S); ZIP="$BACKUP_DIR_DEFAULT/hermes-$TS.zip"
-  CMD="'$HERMES_BIN' backup -o '$ZIP'"
+  # staging: user service (mis. `hermes`) tidak bisa menulis ke /root (mode 700)
+  STAGING=$(mktemp -d /tmp/hermes-backup-XXXXXX); chown "$OC_USER:$OC_GROUP" "$STAGING" 2>/dev/null || true
+  ZIP_STAGE="$STAGING/hermes-$TS.zip"
+  info "staging: $STAGING  →  tujuan: $BACKUP_DIR_DEFAULT"
+  CMD="'$HERMES_BIN' backup -o '$ZIP_STAGE'"
   if [ "$DRY_RUN" -eq 1 ]; then info "dry-run: $CMD"
   else
     if hb "membuat arsip zip" run_hermes "$CMD"; then
+      if mv -f "$ZIP_STAGE" "$ZIP" 2>/dev/null; then
+        chown root:root "$ZIP" 2>/dev/null || true; chmod 600 "$ZIP" 2>/dev/null || true
+        ok "arsip dipindahkan ke $BACKUP_DIR_DEFAULT"
+      else
+        ZIP="$ZIP_STAGE"; warn "gagal memindahkan ke $BACKUP_DIR_DEFAULT — arsip tetap di $ZIP"
+      fi
+      rm -rf "$STAGING" 2>/dev/null || true
       ok "arsip jadi ${GRN}${B}$(basename "$ZIP")${R}  ${GRY}($(hsize "$ZIP") · ${HB_ELAPSED}s)${R}"
       if hb "verifikasi isi zip" zip_check "$ZIP"; then ok "verifikasi zip OK"; else warn "verifikasi zip menemukan masalah"; fi
       grep -iE "restore with|excluded" /tmp/hermes-migrate-cmd.log 2>/dev/null | head -2 | sed 's/^/      /'
     else
+      rm -rf "$STAGING" 2>/dev/null || true
       tail -5 /tmp/hermes-migrate-cmd.log | sed 's/^/      /'
-      die "backup gagal — cek pesan di atas (jika CLI error: jalankan hermes-upgrade.sh untuk memperbaiki instalasi)"
+      printf "\n"
+      _header "✖ BACKUP GAGAL" "$RED"
+      _blc "sebab        lihat pesan error di atas" "  ${GRY}sebab${R}        ${YLW}lihat pesan error di atas${R}"
+      _blc "saran        --output ke folder yang bisa ditulis user $OC_USER" "  ${GRY}saran${R}        ${YLW}--output ke folder yang bisa ditulis user $OC_USER${R}"
+      _blc "             (atau perbaiki instalasi: hermes-upgrade.sh)" "  ${GRY}${R}        ${GRY}(atau perbaiki instalasi: hermes-upgrade.sh)${R}"
+      _blc "" ""; _foot "$RED"; printf "\n"
+      exit 1
     fi
   fi
 
