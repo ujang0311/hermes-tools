@@ -301,6 +301,7 @@ if ! "$HERMES_BIN" --version >/dev/null 2>&1; then
     info "dry-run: akan menjalankan self-heal (hermes-upgrade.sh --repair-only)"
   else
     info "menjalankan self-heal otomatis (hermes-upgrade.sh --repair-only) …"
+    hint "clone source + pip install bisa 5–15 menit di VM kecil (sekali saja)"
     TMPU=$(mktemp /tmp/hermes-upgrade-XXXXXX)
     if curl -fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/ujang0311/hermes-tools/contents/hermes-upgrade.sh?ref=main" -o "$TMPU" 2>/dev/null \
        || curl -fsSL "$REPO_RAW/hermes-upgrade.sh" -o "$TMPU" 2>/dev/null; then
