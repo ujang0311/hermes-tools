@@ -61,6 +61,18 @@ hint(){ printf "      ${GRY}└─ %s${R}\n" "$1"; }
 die(){ printf "\n  ${RED}${B}╭─ GAGAL ──────────────────────────────────────────────────────────────╮${R}\n"
        printf "  ${RED}${B}│${R}  ${RED}✖ %s${R}\n" "$1"
        printf "  ${RED}${B}╰──────────────────────────────────────────────────────────────────────╯${R}\n\n"; exit 1; }
+hb_dir(){ # seperti hb, tapi menampilkan ukuran folder yang tumbuh (cocok untuk git clone)
+  local label="$1" watch="$2"; shift 2
+  local spin=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) i=0 t=0 rc=0 sz
+  "$@" >/tmp/hermes-upgrade-cmd.log 2>&1 & local pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sz=$(du -sh "$watch" 2>/dev/null | cut -f1)
+    printf "\r    ${PRP}%s${R} ${GRY}%s…${R} ${BLD}%ss${R} ${GRY}(%s terunduh)${R}   " "${spin[$((i%10))]}" "$label" "$t" "${sz:-0}"
+    sleep 3; i=$((i+1)); t=$((t+3))
+  done
+  wait "$pid" || rc=$?
+  _clr; HB_ELAPSED=$t; return $rc
+}
 hb(){ local label="$1"; shift; local spin=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) i=0 t=0 rc=0
   "$@" >/tmp/hermes-upgrade-cmd.log 2>&1 & local pid=$!
   while kill -0 "$pid" 2>/dev/null; do printf "\r    ${PRP}%s${R} ${GRY}%s…${R} ${BLD}%ss${R}   " "${spin[$((i%10))]}" "$label" "$t"; sleep 1; i=$((i+1)); t=$((t+1)); done
@@ -264,11 +276,36 @@ if [ "$NEED_REPAIR" -eq 1 ]; then
   else
     command -v git >/dev/null 2>&1 || die "git tidak terpasang (apt-get install -y git)"
     [ -x "$VPIP" ] || die "pip di venv tidak ada: $VPIP"
-    rm -rf "$TARGET_SRC.partial"
-    if hb "clone source Hermes" git clone --depth 1 ${BRANCH:+--branch "$BRANCH"} "$REPO_GIT" "$TARGET_SRC.partial"; then
-      rm -rf "$TARGET_SRC"; mv "$TARGET_SRC.partial" "$TARGET_SRC"; ok "source: $TARGET_SRC"
+    PARTIAL="$TARGET_SRC.partial"
+    BR="${BRANCH:-main}"
+    CLONE_OK=0
+    if [ -d "$PARTIAL/.git" ]; then
+      info "melanjutkan clone yang terputus sebelumnya: $PARTIAL (${HB_ELAPSED:-0})"
+      hb_dir "melanjutkan unduhan source" "$PARTIAL" git -C "$PARTIAL" fetch --depth 1 --progress origin "$BR" && CLONE_OK=1
+      [ "$CLONE_OK" -eq 1 ] && git -C "$PARTIAL" checkout -q FETCH_HEAD 2>/dev/null || true
+    fi
+    if [ "$CLONE_OK" -eq 0 ]; then
+      rm -rf "$PARTIAL"
+      info "clone source (depth 1) — di jaringan lambat bisa 5–15 menit; progres ditampilkan"
+      if hb_dir "clone source" "$PARTIAL" git clone --depth 1 --progress ${BRANCH:+--branch "$BRANCH"} "$REPO_GIT" "$PARTIAL"; then CLONE_OK=1
+      else tail -4 /tmp/hermes-upgrade-cmd.log | sed 's/^/      /'; warn "git clone gagal"; fi
+    fi
+    if [ "$CLONE_OK" -eq 1 ]; then
+      rm -rf "$TARGET_SRC"; mv "$PARTIAL" "$TARGET_SRC"; ok "source: $TARGET_SRC ${GRY}($(hsize "$TARGET_SRC"))${R}"
       chown -R "$OC_USER:$OC_GROUP" "$TARGET_SRC" 2>/dev/null || true
-    else tail -4 /tmp/hermes-upgrade-cmd.log | sed 's/^/      /'; rm -rf "$TARGET_SRC.partial"; die "git clone gagal"; fi
+    else
+      # fallback: arsip source tanpa riwayat git (lebih kecil & tahan jaringan lambat)
+      warn "beralih ke fallback: unduh arsip source (tanpa riwayat git)"
+      ARCH_URL=$(printf '%s' "$REPO_GIT" | sed -E 's#https://github.com/([^/]+)/([^/.]+)(\.git)?#https://codeload.github.com/\1/\2/tar.gz/refs/heads/\3#' | sed "s#refs/heads/#refs/heads/$BR#")
+      rm -rf "$TARGET_SRC"; mkdir -p "$TARGET_SRC"
+      if hb_dir "unduh arsip source" "$TARGET_SRC" bash -c "curl -fsSL '$ARCH_URL' | tar xz --strip-components=1 -C '$TARGET_SRC'"; then
+        ok "source (arsip): $TARGET_SRC ${GRY}($(hsize "$TARGET_SRC"))${R}"
+        chown -R "$OC_USER:$OC_GROUP" "$TARGET_SRC" 2>/dev/null || true
+        warn "instalasi ini TANPA riwayat git — 'hermes update' tidak bisa git pull (install ulang via installer resmi bila ingin update otomatis)"
+      else
+        rm -rf "$TARGET_SRC"; die "gagal mengunduh source (git clone & arsip sama-sama gagal — cek jaringan GitHub VM ini)"
+      fi
+    fi
     if hb "pip install -e (perbaiki editable install)" "$VPIP" install -e "$TARGET_SRC"; then
       ok "editable install diperbaiki → $TARGET_SRC ${GRY}(${HB_ELAPSED}s)${R}"
     else tail -8 /tmp/hermes-upgrade-cmd.log | sed 's/^/      /'; die "pip install -e gagal"; fi
