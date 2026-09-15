@@ -18,7 +18,7 @@
 # ============================================================================
 set -u -o pipefail
 
-VERSION_SCRIPT="1.4.1"
+VERSION_SCRIPT="1.4.2"
 SELF_URL="${HERMES_MIGRATE_URL:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main/hermes-migrate.sh}"
 REPO_RAW="${HERMES_TOOLS_RAW:-https://raw.githubusercontent.com/ujang0311/hermes-tools/main}"
 SERVICES_CANDIDATES=("${HERMES_SERVICE:-hermes-agent}" hermes-gateway hermes-dashboard)
