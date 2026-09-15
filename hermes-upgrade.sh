@@ -14,6 +14,13 @@
 #  script ini meng-clone ulang source ke lokasi PERMANEN lalu pip install -e.
 #
 #  Opsi: --check · --repair-only · --branch NAME · --no-backup · --no-restart · --dry-run
+#        --source-archive FILE.tar.gz   pakai source lokal (untuk VM yang lambat ke GitHub)
+#
+#  Kalau VM lambat/memblokir GitHub (uji nyata: 0,7 MB/menit):
+#    1) di mesin dengan jaringan bagus:  git clone --depth 1 https://github.com/NousResearch/hermes-agent
+#       tar czf hermes-src.tgz --exclude=.git --exclude=venv --exclude=node_modules -C hermes-agent .
+#    2) kirim ke VM (scp bisa ditolak; pakai pipe):  cat hermes-src.tgz | ssh root@VM 'tar xzf - -C /root'
+#    3) di VM:  hermes-upgrade.sh --repair-only --source-archive /root/hermes-src.tgz
 #  Bash >= 4.2 · butuh root
 # ============================================================================
 set -u -o pipefail
@@ -25,7 +32,7 @@ SERVICES_CANDIDATES=("${HERMES_SERVICE:-hermes-agent}" hermes-gateway hermes-das
 BACKUP_DIR="${HERMES_BACKUP_DIR:-/var/backups/hermes}"
 DEFAULT_PORT="${HERMES_GATEWAY_PORT:-18790}"
 
-DRY=0; CHECK=0; REPAIR_ONLY=0; BRANCH=""; DO_BACKUP=1; DO_RESTART=1
+DRY=0; CHECK=0; REPAIR_ONLY=0; BRANCH=""; DO_BACKUP=1; DO_RESTART=1; SRC_ARCHIVE=""
 
 # ── UI ──────────────────────────────────────────────────────────────────────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -86,6 +93,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1 ;;
     --repair-only) REPAIR_ONLY=1 ;;
+    --source-archive) shift; SRC_ARCHIVE="${1:-}" ;;
+    --source-archive=*) SRC_ARCHIVE="${1#*=}" ;;
     --branch) shift; BRANCH="${1:-}" ;;
     --branch=*) BRANCH="${1#*=}" ;;
     --no-backup) DO_BACKUP=0 ;;
@@ -279,6 +288,25 @@ if [ "$NEED_REPAIR" -eq 1 ]; then
     PARTIAL="$TARGET_SRC.partial"
     BR="${BRANCH:-main}"
     CLONE_OK=0
+    if [ -n "$SRC_ARCHIVE" ]; then
+      [ -f "$SRC_ARCHIVE" ] || die "--source-archive tidak ditemukan: $SRC_ARCHIVE"
+      info "memakai arsip source lokal: $SRC_ARCHIVE (melewati unduhan GitHub)"
+      TMPX=$(mktemp -d /tmp/hermes-src-XXXXXX)
+      if hb "ekstrak arsip source" tar xzf "$SRC_ARCHIVE" -C "$TMPX"; then
+        N_TOP=$(find "$TMPX" -maxdepth 1 -mindepth 1 | wc -l | tr -d ' ')
+        TOP=$(find "$TMPX" -maxdepth 1 -mindepth 1 | head -1)
+        if [ "$N_TOP" = 1 ] && [ -d "$TOP" ]; then SRCX="$TOP"; else SRCX="$TMPX"; fi
+        if [ -f "$SRCX/pyproject.toml" ] || [ -f "$SRCX/setup.py" ]; then
+          rm -rf "$TARGET_SRC"; mv "$SRCX" "$TARGET_SRC"; CLONE_OK=1
+          ok "source dari arsip: $TARGET_SRC ${GRY}($(hsize "$TARGET_SRC"))${R}"
+          chown -R "$OC_USER:$OC_GROUP" "$TARGET_SRC" 2>/dev/null || true
+          warn "instalasi tanpa riwayat git — 'hermes update' tidak bisa git pull (pakai installer resmi untuk update otomatis)"
+        else
+          warn "arsip tidak berisi proyek Python (pyproject.toml/setup.py tidak ada)"
+        fi
+      else warn "gagal mengekstrak arsip source"; fi
+      rm -rf "$TMPX" 2>/dev/null || true
+    fi
     if [ -d "$PARTIAL/.git" ]; then
       info "melanjutkan clone yang terputus sebelumnya: $PARTIAL (${HB_ELAPSED:-0})"
       hb_dir "melanjutkan unduhan source" "$PARTIAL" git -C "$PARTIAL" fetch --depth 1 --progress origin "$BR" && CLONE_OK=1
